@@ -1,0 +1,121 @@
+﻿name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  buildlinux:
+    name: "Release"
+    env:
+        ASPNETCORE_ENVIRONMENT: "Production"
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2.3.4
+
+    - name: Get the version
+      id: get_version
+      run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
+      
+    - name: Restore Nuget Packages
+      run: dotnet restore FileFormatConversion.sln --source ${{ secrets.PUBLICFEEDURL }} --source ${{ secrets.PRIVATEFEED_URL }}
+
+    - name: Build Code
+      run: dotnet build FileFormatConversion.sln --configuration Release
+
+    #- name: Publish Images to Docker Hub - Pre Release
+    #  if: ${{ github.event.release.prerelease == true }} 
+    #  run: |
+    #    docker build . --file TransactionProcessor/Dockerfile --tag stuartferguson/transactionprocessor:dev
+    #    docker login --username=${{ secrets.DOCKER_USERNAME }} --password=${{ secrets.DOCKER_PASSWORD }}
+    #    docker push stuartferguson/transactionprocessor:dev
+
+    #- name: Publish Images to Docker Hub - Formal Release
+    #  if: ${{ github.event.release.prerelease == false }} 
+    #  run: |
+    #    docker build . --file TransactionProcessor/Dockerfile --tag stuartferguson/transactionprocessor:latest
+    #    docker login --username=${{ secrets.DOCKER_USERNAME }} --password=${{ secrets.DOCKER_PASSWORD }}
+    #    docker push stuartferguson/transactionprocessor:latest
+
+    - name: Publish API
+      if: ${{ github.event.release.prerelease == false }}
+      run: dotnet publish "FileFormatConversion\FileFormatConversion.csproj" --configuration Release --output publishOutput -r win-x64 --self-contained
+
+    - name: Build Release Package
+      run: |
+         cd /home/runner/work/FileFormatConversion/FileFormatConversion/publishOutput
+         zip -r ../fileformatconversion.zip ./*
+
+    - name: Upload the artifact
+      uses: actions/upload-artifact@v4.4.0
+      with:
+        name: fileformatconversion
+        path: fileformatconversion.zip
+    
+  deploystaging:
+    runs-on: stagingserver
+    needs: buildlinux
+    environment: staging
+    name: "Deploy to Staging"
+    
+    steps:
+      - name: Download the artifact
+        uses: actions/download-artifact@v4.1.8
+        with:
+          name: fileformatconversion
+
+      - name: Remove existing  Windows service
+        run: |
+          $serviceName = "Transaction Processing - File Format Conversion"
+          # Check if the service exists
+          if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
+            Stop-Service -Name $serviceName
+            sc.exe delete $serviceName
+          }
+
+      - name: Unzip the files
+        run: |
+          Expand-Archive -Path fileformatconversion.zip -DestinationPath "C:\txnproc\transactionprocessing\fileformatconversion" -Force
+      
+      - name: Install as a Windows service
+        run: |
+          $serviceName = "Transaction Processing - File Format Conversion"
+          $servicePath = "C:\txnproc\transactionprocessing\fileformatconversion\FileFormatConversion.exe"
+                   
+          New-Service -Name $serviceName -BinaryPathName $servicePath -Description "Transaction Processing - File Format Conversion" -DisplayName "Transaction Processing - File Format Conversion" -StartupType Automatic
+          Start-Service -Name $serviceName
+
+  deployproduction:
+    runs-on: productionserver
+    needs: [buildlinux, deploystaging]
+    environment: production
+    name: "Deploy to Production"
+    
+    steps:
+      - name: Download the artifact
+        uses: actions/download-artifact@v4.1.8
+        with:
+          name: fileformatconversion
+
+      - name: Remove existing  Windows service
+        run: |
+          $serviceName = "Transaction Processing - File Format Conversion"
+          # Check if the service exists
+          if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
+            Stop-Service -Name $serviceName
+            sc.exe delete $serviceName
+          }
+
+      - name: Unzip the files
+        run: |
+          Expand-Archive -Path fileformatconversion.zip -DestinationPath "C:\txnproc\transactionprocessing\fileformatconversion" -Force
+      
+      - name: Install as a Windows service
+        run: |
+          $serviceName = "Transaction Processing - File Format Conversion"
+          $servicePath = "C:\txnproc\transactionprocessing\fileformatconversion\FileFormatConversion.exe"
+                   
+          New-Service -Name $serviceName -BinaryPathName $servicePath -Description "Transaction Processing - File Format Conversion" -DisplayName "Transaction Processing - File Format Conversion" -StartupType Automatic
+          Start-Service -Name $serviceName

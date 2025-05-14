@@ -1,0 +1,9 @@
+name: Move Task on PR Assignment
+on:
+  pull_request:
+    types: [assigned]
+
+jobs:
+  move_task:
+    uses: TransactionProcessing/org-ci-workflows/.github/workflows/move_task.yml@main
+    secrets: inherit
